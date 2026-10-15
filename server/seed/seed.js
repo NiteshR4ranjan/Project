@@ -14,32 +14,45 @@ const PriceAlert = require('../models/PriceAlert');
 const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
 
-const seedData = async () => {
+const seedData = async ({ catalogOnly = false } = {}) => {
   try {
     const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/dealkart';
-    await mongoose.connect(mongoUri);
-    console.log(`[Seed Script]: Connected to MongoDB at ${mongoUri}`);
+    if (mongoose.connection.readyState !== 1) {
+      await mongoose.connect(mongoUri);
+    }
+    console.log('[Seed Script]: Connected to MongoDB.');
 
-    // Clean database completely to ensure no legacy index conflicts
-    console.log('[Seed Script]: Dropping database to reset legacy indexes...');
-    await mongoose.connection.dropDatabase();
-    console.log('[Seed Script]: Database reset cleanly.');
+    if (catalogOnly) {
+      const existingProductCount = await Product.countDocuments();
+      if (existingProductCount > 0) {
+        console.log(`[Catalog Bootstrap]: Found ${existingProductCount} products; leaving existing catalog unchanged.`);
+        return 0;
+      }
+    } else {
+      console.log('[Seed Script]: Dropping database to reset legacy indexes...');
+      await mongoose.connection.dropDatabase();
+      console.log('[Seed Script]: Database reset cleanly.');
+    }
 
     // 1. Create Demo Users
-    console.log('[Seed Script]: Creating Demo Accounts...');
-    const adminUser = await User.create({
-      name: 'DealKart Administrator',
-      email: 'admin@dealkart.com',
-      password: 'Admin@123',
-      role: 'admin',
-    });
+    let adminUser = null;
+    let studentUser = null;
+    if (!catalogOnly) {
+      console.log('[Seed Script]: Creating Demo Accounts...');
+      adminUser = await User.create({
+        name: 'DealKart Administrator',
+        email: 'admin@dealkart.com',
+        password: 'Admin@123',
+        role: 'admin',
+      });
 
-    const studentUser = await User.create({
-      name: 'College Student (Demo)',
-      email: 'user@dealkart.com',
-      password: 'User@123',
-      role: 'user',
-    });
+      studentUser = await User.create({
+        name: 'College Student (Demo)',
+        email: 'user@dealkart.com',
+        password: 'User@123',
+        role: 'user',
+      });
+    }
 
     // 2. Create Stores discovered through Gemini grounding or maintained manually
     console.log('[Seed Script]: Creating Shopping Stores...');
@@ -100,7 +113,13 @@ const seedData = async () => {
       },
     ];
 
-    const stores = await Store.insertMany(storeData);
+    const stores = catalogOnly
+      ? await Promise.all(storeData.map((store) => Store.findOneAndUpdate(
+        { name: store.name },
+        { $setOnInsert: store },
+        { new: true, upsert: true }
+      )))
+      : await Store.insertMany(storeData);
     const storeMap = {};
     stores.forEach((s) => (storeMap[s.name] = s._id));
 
@@ -118,7 +137,13 @@ const seedData = async () => {
       { name: 'Fitness', slug: 'fitness', icon: 'Activity', description: 'Fitness trackers, dumbbells & workout gear' },
     ];
 
-    const categories = await Category.insertMany(categoryData);
+    const categories = catalogOnly
+      ? await Promise.all(categoryData.map((category) => Category.findOneAndUpdate(
+        { slug: category.slug },
+        { $setOnInsert: category },
+        { new: true, upsert: true }
+      )))
+      : await Category.insertMany(categoryData);
     const catMap = {};
     categories.forEach((c) => (catMap[c.slug] = c._id));
 
@@ -891,6 +916,11 @@ const seedData = async () => {
 
     console.log(`[Seed Script]: Successfully created ${seededProductCount} products with full store prices and 45-day history.`);
 
+    if (catalogOnly) {
+      console.log(`[Catalog Bootstrap]: Added ${seededProductCount} products to the empty catalog.`);
+      return seededProductCount;
+    }
+
     // 5. Create Active & Real Store Coupons
     console.log('[Seed Script]: Creating active store coupons...');
     const thirtyDaysAhead = new Date(now + 30 * dayMs);
@@ -1023,8 +1053,15 @@ const seedData = async () => {
     process.exit(0);
   } catch (error) {
     console.error('[Seed Script Error]:', error);
+    if (catalogOnly) throw error;
     process.exit(1);
   }
 };
 
-seedData();
+if (require.main === module) {
+  seedData();
+}
+
+module.exports = {
+  seedCatalogIfEmpty: () => seedData({ catalogOnly: true }),
+};

@@ -8,9 +8,7 @@ const initPriceCron = require('./jobs/priceCron');
 const path = require('path');
 // Load environment variables from server/.env
 dotenv.config({ path: path.join(__dirname, '.env') });
-
-// Connect to MongoDB
-connectDB();
+const { seedCatalogIfEmpty } = require('./seed/seed');
 
 // Initialize express app
 const app = express();
@@ -54,16 +52,29 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 app.use(notFound);
 app.use(errorHandler);
 
-// Initialize node-cron scheduled price updates
-initPriceCron();
-
 const PORT = process.env.PORT || 5001;
 
-const server = app.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 DealKart Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  console.log(`📡 REST API: http://localhost:${PORT}/api/health`);
-  console.log(`=======================================================`);
+let server;
+
+const startServer = async () => {
+  await connectDB();
+
+  if (process.env.SEED_CATALOG_IF_EMPTY === 'true') {
+    await seedCatalogIfEmpty();
+  }
+
+  initPriceCron();
+  server = app.listen(PORT, () => {
+    console.log('=======================================================');
+    console.log(`DealKart Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+    console.log(`REST API: http://localhost:${PORT}/api/health`);
+    console.log('=======================================================');
+  });
+};
+
+startServer().catch((error) => {
+  console.error('[Server Startup Error]:', error);
+  process.exit(1);
 });
 
-module.exports = { app, server };
+module.exports = { app, get server() { return server; } };
