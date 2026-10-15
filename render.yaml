@@ -22,10 +22,7 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: dealkart-api
-          property: host
+        value: https://dealkart-api.onrender.com/api
     routes:
       - type: rewrite
         source: /*
