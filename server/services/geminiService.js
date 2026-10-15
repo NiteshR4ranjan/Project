@@ -3,7 +3,7 @@ const ReviewAnalysis = require('../models/ReviewAnalysis');
 const ReviewData = require('../models/ReviewData');
 const GeminiRequestLog = require('../models/GeminiRequestLog');
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const GEMINI_API_URL = process.env.GEMINI_API_URL || 'https://generativelanguage.googleapis.com/v1beta/models';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
