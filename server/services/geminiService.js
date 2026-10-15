@@ -122,12 +122,36 @@ const normalizeProduct = (item = {}, query = '', index = 0) => {
   const name = normalizeText(item.name || item.productName || item.title);
   if (!name) return null;
 
-  const price = toNumber(item.price ?? item.currentPrice, 0);
-  const originalPrice = toNumber(item.originalPrice ?? item.mrp ?? item.listPrice, price);
-  const discount = toNumber(item.discount, originalPrice > price && price > 0 ? Math.round(((originalPrice - price) / originalPrice) * 100) : 0);
-  const store = normalizeText(item.store || item.source || 'Not available');
+  const rawStoreResults = Array.isArray(item.storeResults) && item.storeResults.length > 0
+    ? item.storeResults
+    : Array.isArray(item.offers) && item.offers.length > 0
+      ? item.offers
+      : [item];
+  const storeResults = rawStoreResults
+    .map((offer) => {
+      const price = toNumber(offer.price ?? offer.currentPrice, 0);
+      const originalPrice = toNumber(offer.originalPrice ?? offer.mrp ?? offer.listPrice, price);
+      const storeName = normalizeText(offer.storeName || offer.store || offer.retailer || '');
+      if (!storeName || price <= 0) return null;
+      return {
+        storeName,
+        price,
+        originalPrice: originalPrice || price,
+        discount: toNumber(offer.discount, originalPrice > price ? Math.round(((originalPrice - price) / originalPrice) * 100) : 0),
+        productUrl: normalizeUrl(offer.productUrl || offer.url || offer.link || ''),
+        imageUrl: normalizeUrl(offer.imageUrl || offer.image || ''),
+        availability: normalizeText(offer.availability || 'Not available'),
+        source: normalizeText(offer.source || 'Gemini web grounding'),
+      };
+    })
+    .filter(Boolean);
+  const primaryOffer = storeResults[0] || null;
+  const price = primaryOffer?.price || toNumber(item.price ?? item.currentPrice, 0);
+  const originalPrice = primaryOffer?.originalPrice || toNumber(item.originalPrice ?? item.mrp ?? item.listPrice, price);
+  const discount = primaryOffer?.discount || toNumber(item.discount, originalPrice > price && price > 0 ? Math.round(((originalPrice - price) / originalPrice) * 100) : 0);
+  const store = primaryOffer?.storeName || normalizeText(item.store || item.source || 'Not available');
   const imageUrl = normalizeUrl(item.imageUrl || item.image || item.thumbnail || '');
-  const productUrl = normalizeUrl(item.productUrl || item.url || item.link || '');
+  const productUrl = primaryOffer?.productUrl || normalizeUrl(item.productUrl || item.url || item.link || '');
   const reviewAnalysis = normalizeReviewAnalysis(item.reviewAnalysis || {}, {
     score: item.reviewScore,
     overallScore: item.reviewScore,
@@ -137,6 +161,8 @@ const normalizeProduct = (item = {}, query = '', index = 0) => {
     _id: `gemini-${Date.now()}-${index}`,
     name,
     brand: normalizeText(item.brand || name.split(/\s+/)[0] || 'Product'),
+    description: normalizeText(item.description || ''),
+    category: normalizeText(typeof item.category === 'string' ? item.category : item.category?.name || ''),
     price,
     lowestPrice: price,
     highestPrice: originalPrice || price,
@@ -151,24 +177,13 @@ const normalizeProduct = (item = {}, query = '', index = 0) => {
     discount,
     maxDiscount: discount,
     specifications: item.specifications && typeof item.specifications === 'object' && !Array.isArray(item.specifications) ? item.specifications : {},
+    storeResults,
     reviewAnalysis,
     overallScore: reviewAnalysis.overallScore || reviewAnalysis.score || 0,
     recommendationReason: reviewAnalysis.recommendationReason,
     availability: normalizeText(item.availability || 'Not available'),
     isLiveResult: true,
-    availableStoresCount: 1,
-    storeResults: [
-      {
-        storeName: store,
-        price,
-        originalPrice: originalPrice || price,
-        discount,
-        productUrl,
-        imageUrl,
-        source: normalizeText(item.source || 'Gemini web grounding'),
-        availability: normalizeText(item.availability || 'Not available'),
-      },
-    ],
+    availableStoresCount: storeResults.length || (store !== 'Not available' ? 1 : 0),
     query,
   };
 };
@@ -205,6 +220,8 @@ Return valid JSON only with this exact shape:
     {
       "name": "string",
       "brand": "string or null",
+      "description": "verified concise product description or null",
+      "category": "best matching retail category or null",
       "price": number or null,
       "currency": "INR",
       "store": "string or null",
@@ -214,6 +231,17 @@ Return valid JSON only with this exact shape:
       "reviewCount": number or null,
       "discount": number or null,
       "specifications": {},
+      "storeResults": [
+        {
+          "storeName": "retailer name",
+          "price": number or null,
+          "originalPrice": number or null,
+          "discount": number or null,
+          "productUrl": "https URL or null",
+          "imageUrl": "https URL or null",
+          "availability": "In Stock, Out of Stock, Limited Stock, or Not available"
+        }
+      ],
       "source": "Gemini web grounding",
       "reviewAnalysis": {
         "score": number or null,
@@ -250,7 +278,7 @@ Return valid JSON only with this exact shape:
 }
 
 Rules:
-- Try to return up to 5 reliable product choices. Return fewer if fewer can be verified.
+- Try to return up to 5 reliable product choices. For each exact model, include offers from multiple retailers in storeResults when verified. Return fewer offers if fewer can be verified.
 - Do not invent prices, ratings, review counts, images, stores, URLs, specifications, or reviews. Use null when not verified.
 - Review summaries must summarize available public review information, not pretend to be raw customer reviews.
 - Recommendations must prioritize review quality, sentiment, complaint severity, specifications, and price/value. Do not simply choose the cheapest item.
@@ -259,7 +287,7 @@ Rules:
 
 const searchProductsWithGemini = async (query) => {
   const cleanQuery = normalizeText(query);
-  const queryKey = queryKeyFor('search', cleanQuery);
+  const queryKey = queryKeyFor('search-v2', cleanQuery);
 
   const cached = await ReviewAnalysis.findOne({
     queryKey,

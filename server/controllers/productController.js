@@ -4,7 +4,7 @@ const Price = require('../models/Price');
 const PriceHistory = require('../models/PriceHistory');
 const ReviewAnalysis = require('../models/ReviewAnalysis');
 const priceService = require('../services/priceService');
-const { generateReviewAnalysis, getReviewDataForProduct } = require('../services/geminiService');
+const { generateReviewAnalysis, getReviewDataForProduct, searchProductsWithGemini, hasValidGeminiConfig } = require('../services/geminiService');
 const { normalizeString } = require('../utils/normalizer');
 
 // @desc    Get all products with filtering, sorting, and pagination
@@ -322,12 +322,65 @@ const getProductById = async (req, res, next) => {
       .populate('storeId', 'name websiteUrl sourceType logo lastSuccessfulFetch')
       .sort({ price: 1 });
 
+    let responseProduct = {
+      ...product.toObject(),
+      prices,
+      detailsSource: 'DealKart catalog',
+      sources: [],
+    };
+
+    if (hasValidGeminiConfig()) {
+      try {
+        const research = await searchProductsWithGemini(`${product.brand} ${product.name}`);
+        const exactMatch = research.products.find((candidate) => {
+          return priceService.offersMatchByBrandModel(
+            { name: `${product.brand || ''} ${product.name || ''}` },
+            { name: `${candidate.brand || ''} ${candidate.name || ''}` }
+          );
+        });
+
+        if (exactMatch) {
+          const livePrices = (exactMatch.storeResults || [])
+            .filter((offer) => offer.price > 0)
+            .map((offer, index) => ({
+              _id: `gemini-${product._id}-${index}`,
+              price: offer.price,
+              originalPrice: offer.originalPrice || offer.price,
+              discount: offer.discount || 0,
+              availability: offer.availability || 'Not available',
+              productUrl: offer.productUrl || '',
+              imageUrl: offer.imageUrl || exactMatch.imageUrl || '',
+              lastUpdated: new Date(),
+              source: offer.source || 'Gemini web grounding',
+              storeId: { name: offer.storeName, sourceType: 'gemini' },
+            }));
+          const livePricesToUse = livePrices.length > 0 ? livePrices : prices;
+          const livePriceValues = livePricesToUse.map((entry) => entry.price).filter((value) => value > 0);
+
+          responseProduct = {
+            ...responseProduct,
+            description: exactMatch.description || responseProduct.description,
+            category: exactMatch.category ? { ...responseProduct.category, name: exactMatch.category } : responseProduct.category,
+            specifications: Object.keys(exactMatch.specifications || {}).length > 0 ? exactMatch.specifications : responseProduct.specifications,
+            imageUrl: exactMatch.imageUrl || responseProduct.imageUrl,
+            prices: livePricesToUse,
+            lowestPrice: livePriceValues.length ? Math.min(...livePriceValues) : responseProduct.lowestPrice,
+            highestPrice: livePriceValues.length ? Math.max(...livePriceValues) : responseProduct.highestPrice,
+            availableStoresCount: livePricesToUse.length,
+            detailsSource: livePrices.length > 0 || exactMatch.description || exactMatch.category || Object.keys(exactMatch.specifications || {}).length > 0
+              ? 'Gemini web grounding'
+              : responseProduct.detailsSource,
+            sources: research.sources || [],
+          };
+        }
+      } catch (researchError) {
+        console.warn('[Product Details] Gemini enrichment failed; using catalog data:', researchError.message);
+      }
+    }
+
     res.json({
       success: true,
-      data: {
-        ...product.toObject(),
-        prices,
-      },
+      data: responseProduct,
     });
   } catch (error) {
     next(error);
