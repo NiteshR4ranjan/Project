@@ -1,10 +1,13 @@
 import axios from 'axios';
 
 const configuredApiUrl = import.meta.env.VITE_API_URL?.replace(/\/+$/, '');
+const apiOrigin = configuredApiUrl
+  ? `${/^https?:\/\//i.test(configuredApiUrl) ? '' : 'https://'}${configuredApiUrl}`
+  : '';
 
 const api = axios.create({
-  baseURL: configuredApiUrl
-    ? `${configuredApiUrl}${configuredApiUrl.endsWith('/api') ? '' : '/api'}`
+  baseURL: apiOrigin
+    ? `${apiOrigin}${apiOrigin.endsWith('/api') ? '' : '/api'}`
     : 'http://localhost:5001/api',
   headers: {
     'Content-Type': 'application/json',
