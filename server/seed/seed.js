@@ -827,35 +827,39 @@ const seedData = async ({ catalogOnly = false } = {}) => {
       },
     ];
 
-    // Seed each product, its store prices, and 30-day historical prices
-    let seededProductCount = 0;
+    // Insert the catalog in batches so a new production database is ready quickly.
     const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
 
-    for (const item of productsSeed) {
+    const productsToInsert = productsSeed.map((item) => {
       const { prices: storePrices, ...productData } = item;
-
       const pValues = storePrices.map((sp) => sp.price);
       const dValues = storePrices.map((sp) =>
         Math.round(((sp.originalPrice - sp.price) / sp.originalPrice) * 100)
       );
 
-      const product = await Product.create({
+      return {
         ...productData,
         lowestPrice: Math.min(...pValues),
         highestPrice: Math.max(...pValues),
         maxDiscount: Math.max(...dValues, 0),
         availableStoresCount: storePrices.length,
-      });
+      };
+    });
 
-      // Insert current prices for each store
-      for (const sp of storePrices) {
+    const products = await Product.insertMany(productsToInsert);
+    const priceRecords = [];
+    const historyRecords = [];
+
+    productsSeed.forEach((item, index) => {
+      const product = products[index];
+      for (const sp of item.prices) {
         const storeId = storeMap[sp.store];
         if (!storeId) continue;
 
         const discount = Math.round(((sp.originalPrice - sp.price) / sp.originalPrice) * 100);
 
-        await Price.create({
+        priceRecords.push({
           productId: product._id,
           storeId,
           price: sp.price,
@@ -867,52 +871,27 @@ const seedData = async ({ catalogOnly = false } = {}) => {
           lastUpdated: new Date(),
         });
 
-        // Generate 30-60 days of realistic simulated historical fluctuations
-        // (e.g. price was slightly higher 30 days ago, dipped during sale 15 days ago, etc.)
-        const historyEntries = [];
         const basePrice = sp.price;
-
-        // Day 45 ago
-        historyEntries.push({
-          productId: product._id,
-          storeId,
-          price: Math.round(basePrice * 1.06),
-          recordedAt: new Date(now - 45 * dayMs),
+        [
+          { factor: 1.06, daysAgo: 45 },
+          { factor: 1.04, daysAgo: 30 },
+          { factor: 0.97, daysAgo: 20 },
+          { factor: 1.02, daysAgo: 10 },
+          { factor: 1, daysAgo: 0 },
+        ].forEach(({ factor, daysAgo }) => {
+          historyRecords.push({
+            productId: product._id,
+            storeId,
+            price: Math.round(basePrice * factor),
+            recordedAt: new Date(now - daysAgo * dayMs),
+          });
         });
-        // Day 30 ago
-        historyEntries.push({
-          productId: product._id,
-          storeId,
-          price: Math.round(basePrice * 1.04),
-          recordedAt: new Date(now - 30 * dayMs),
-        });
-        // Day 20 ago (Sale festival dip)
-        historyEntries.push({
-          productId: product._id,
-          storeId,
-          price: Math.round(basePrice * 0.97),
-          recordedAt: new Date(now - 20 * dayMs),
-        });
-        // Day 10 ago
-        historyEntries.push({
-          productId: product._id,
-          storeId,
-          price: Math.round(basePrice * 1.02),
-          recordedAt: new Date(now - 10 * dayMs),
-        });
-        // Current day
-        historyEntries.push({
-          productId: product._id,
-          storeId,
-          price: basePrice,
-          recordedAt: new Date(),
-        });
-
-        await PriceHistory.insertMany(historyEntries);
       }
+    });
 
-      seededProductCount++;
-    }
+    await Price.insertMany(priceRecords);
+    await PriceHistory.insertMany(historyRecords);
+    const seededProductCount = products.length;
 
     console.log(`[Seed Script]: Successfully created ${seededProductCount} products with full store prices and 45-day history.`);
 

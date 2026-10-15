@@ -3,6 +3,7 @@ services:
     name: dealkart-api
     runtime: node
     plan: free
+    healthCheckPath: /api/health
     rootDir: server
     buildCommand: npm install
     startCommand: npm start

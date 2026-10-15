@@ -12,6 +12,7 @@ const { seedCatalogIfEmpty } = require('./seed/seed');
 
 // Initialize express app
 const app = express();
+let isReady = false;
 
 // Enable Cross-Origin Resource Sharing
 app.use(
@@ -27,6 +28,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // Health check root endpoint
 app.get('/api/health', (req, res) => {
+  if (!isReady) {
+    return res.status(503).json({ status: 'starting' });
+  }
+
   res.json({
     status: 'online',
     service: 'DealKart API & Price Acquisition Service',
@@ -56,25 +61,21 @@ const PORT = process.env.PORT || 5001;
 
 let server;
 
-const startServer = async () => {
+server = app.listen(PORT, () => {
+  console.log(`DealKart Server starting on port ${PORT}`);
+});
+
+const initializeServer = async () => {
   await connectDB();
-
-  if (process.env.SEED_CATALOG_IF_EMPTY === 'true') {
-    await seedCatalogIfEmpty();
-  }
-
+  if (process.env.SEED_CATALOG_IF_EMPTY === 'true') await seedCatalogIfEmpty();
   initPriceCron();
-  server = app.listen(PORT, () => {
-    console.log('=======================================================');
-    console.log(`DealKart Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-    console.log(`REST API: http://localhost:${PORT}/api/health`);
-    console.log('=======================================================');
-  });
+  isReady = true;
+  console.log(`DealKart Server running in ${process.env.NODE_ENV || 'development'} mode`);
 };
 
-startServer().catch((error) => {
+initializeServer().catch((error) => {
   console.error('[Server Startup Error]:', error);
-  process.exit(1);
+  server.close(() => process.exit(1));
 });
 
 module.exports = { app, get server() { return server; } };
